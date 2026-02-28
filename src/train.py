@@ -12,11 +12,41 @@ with app.setup:
     from pathlib import Path
     from safetensors import safe_open
 
+    from torch.utils.data import TensorDataset, DataLoader
+
 
 @app.function
-def get_sequential_batch(config, split):
-    block_size = config["block_size"]
+def get_batch_loader(config, split):
     batch_size = config["batch_size"]
+    block_size = config["block_size"]
+    device  = config["device"]
+    
+    file_name = "train-validation.safetensors"
+    root_file = Path(__file__).parent.parent
+    file_path = root_file / "data" / file_name
+    
+    with safe_open(file_path, framework="pt", device="cpu") as f:
+            # Access tensors by name
+            data = f.get_tensor(split)
+    
+    data_length = len(data)
+    quotient = (data_length // block_size)-1
+    truncate_length = block_size * quotient
+    
+    x = data[:truncate_length].view(-1, block_size)
+    y = data[1:truncate_length+1].view(-1, block_size)
+    
+    dataset = TensorDataset(x, y)
+    
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    return loader
+
+
+@app.function
+def get_batch_slice(config, split):
+    batch_size = config["batch_size"]
+    block_size = config["block_size"]
     device  = config["device"]
 
     file_name = "train-validation.safetensors"
@@ -24,7 +54,7 @@ def get_sequential_batch(config, split):
     file_path = root_file / "data" / file_name
 
     with safe_open(file_path, framework="pt", device="cpu") as f:
-        tensor_slice = f.get_slice("train")
+        tensor_slice = f.get_slice(split)
         data = tensor_slice[:batch_size*block_size + 1]
 
     x = data[:-1].view(batch_size, block_size)
@@ -36,7 +66,7 @@ def get_sequential_batch(config, split):
 
 
 @app.function
-def get_batch(config, split):
+def get_batch_random(config, split):
     block_size = config["block_size"]
     batch_size = config["batch_size"]
     device  = config["device"]
@@ -47,7 +77,7 @@ def get_batch(config, split):
 
     with safe_open(file_path, framework="pt", device="cpu") as f:
         # Access tensors by name
-        data = f.get_tensor("train")
+        data = f.get_tensor(split)
 
     ix = torch.randint(len(data) - block_size, (batch_size,))
 
@@ -67,10 +97,10 @@ def estimate_loss(config, model):
 
     out = {}
     model.eval()
-    for split in ["train", "val"]:
+    for split in ["train", "validation"]:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(config, split)
+            X, Y = get_batch_random(config, split)
             logits, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -160,12 +190,12 @@ def initialize_model(config):
     if compile:
         print("compiling the model... (takes a ~minute)")
         model = torch.compile(model) # requires PyTorch 2.0
-    
+
     return model, optimizer
 
 
 @app.function
-def train(config, model, optimizer):
+def train_random_batches(config, model, optimizer):
     max_iters = config["max_iters"]
     lr_decay_iters = config["lr_decay_iters"]
     eval_interval = config["eval_interval"]
@@ -178,15 +208,48 @@ def train(config, model, optimizer):
 
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
-        
+
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % eval_interval == 0 or iter_num == max_iters - 1:
             losses = estimate_loss(config, model)
-            print(f"step {iter_num}: train loss {losses["train"]:.4f}, val loss {losses["val"]:.4f}")
-        
+            print(f"step {iter_num}: train loss {losses["train"]:.4f}, val loss {losses["validation"]:.4f}")
+
         # sample a batch of data
-        X, Y = get_batch(config, "train")
+        X, Y = get_batch_random(config, "train")
+
+        # evaluate the loss
+        logits, loss = model(X, Y)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+
+@app.function
+def train_sequential_batches(config, model, optimizer):
+    max_iters = config["max_iters"]
+    lr_decay_iters = config["lr_decay_iters"]
+    eval_interval = config["eval_interval"]
+
+    loader = get_batch_loader(config, "train")
+    loader_iter = iter(loader)
     
+    # training loop
+    for iter_num in range(max_iters):
+        # determine and set the learning rate for this iteration
+        if lr_decay_iters > max_iters:
+            lr = get_lr(config, iter_num)
+
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
+        # evaluate the loss on train/val sets and write checkpoints
+        if iter_num % eval_interval == 0 or iter_num == max_iters - 1:
+            losses = estimate_loss(config, model)
+            print(f"step {iter_num}: train loss {losses["train"]:.4f}, val loss {losses["validation"]:.4f}")
+
+        # sample a batch of data
+        X, Y  = next(loader_iter)
+
         # evaluate the loss
         logits, loss = model(X, Y)
         optimizer.zero_grad(set_to_none=True)

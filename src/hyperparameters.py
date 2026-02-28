@@ -45,26 +45,26 @@ def _():
 
 # @app.command()
 def intialize_hyperparameters(
-    batch_size: int = 12,
-    block_size: int = 64,
+    batch_size: int = 4,
+    block_size: int = 8,
     vocab_size = 50304,
-    n_layer: int = 4,
-    n_head: int = 4,
-    n_embd: int = 128,
+    n_layer: int = 2,
+    n_head: int = 2,
+    n_embd: int = 64,
     dropout: float = 0.0,
     weight_decay: float = 1e-1,
-    learning_rate: float = 1e-3,
-    max_iters: int = 2000,
+    learning_rate: float = 3e-4,
+    max_iters: int = 20,
     warmup_iters: int = 0,
     lr_decay_iters: int = 2000,
     min_lr: float = 1e-4,
     beta1: float = 0.9,
     beta2: float = 0.99,
     bias: bool = False,
-    device: str = "cpu",
     compile: bool = False,
     eval_iters: int = 20,
-    eval_interval: int = 250,
+    eval_interval: int = 1,
+    device: str = "cpu",
     init_from: str = "scratch"):
 
     config_dict = {
@@ -84,12 +84,14 @@ def intialize_hyperparameters(
         "beta1": beta1,
         "beta2": beta2,
         "bias": bias,
-        "device": device,
         "compile": compile,
         "eval_iters": eval_iters,
         "eval_interval": eval_interval,
+        "device": device,
         "init_from": init_from
     }
+
+    print(config_dict)
 
     return config_dict
 
